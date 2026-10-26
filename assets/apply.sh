@@ -9,6 +9,10 @@ ASSETS_DIR="$(dirname "$(realpath "$0")")"
 QML_PATH="$ASSETS_DIR/screensaver-main.qml"
 SAM="luna://com.webos.applicationManager"
 BLOCK_SCHEMA="/etc/palm/schemas/sam/applicationManager.blockSystemApp.schema"
+VIDEO_APP_ID="com.webos.app.videoads"
+VIDEO_APP_DIR="/usr/palm/applications/$VIDEO_APP_ID"
+VIDEO_MANIFEST="$ASSETS_DIR/appinfo-videoads.json"
+SETTINGS_CALL="luna://com.webos.service.settings/setSystemSettings"
 
 if [[ -f "$MOUNT_TARGET" ]]; then
     if ! findmnt "$MOUNT_TARGET"; then
@@ -35,6 +39,13 @@ fi
 sam_call() {  # method payload pattern
     reply="$($TIMEOUT luna-send -n 1 "$SAM/$1" "$2" </dev/null 2>/dev/null || true)"
     echo "$reply" | grep -qiE "$3"
+}
+
+# webOS SDK major, 0 when the call fails
+sdk_major() {
+    version="$($TIMEOUT luna-send -n 1 -f luna://com.webos.service.tv.systemproperty/getSystemInfo \
+        '{"keys":["sdkVersion"]}' </dev/null 2>/dev/null | sed -n 's/.*"sdkVersion": *"\([0-9]*\).*/\1/p')"
+    echo "${version:-0}"
 }
 
 # Whether SAM reports the screensaver as the web app, polling for up to 20 s: at boot SAM can
@@ -115,6 +126,72 @@ apply_web() {
     fi
     exit 0
 }
+
+if [ "$1" = "--off" ]; then
+    # Put the stock screen saver back. The settings survive a reboot, the mounts do not, so
+    # both have to go: with the flag on and no mount, tvpowerd would start LG's ad screen saver.
+    $TIMEOUT luna-send -n 1 "$SETTINGS_CALL" \
+        '{"category":"lgchannels","settings":{"isVideoScreenSaverEnabled":false}}' </dev/null >/dev/null 2>&1 || true
+    umount "$VIDEO_APP_DIR/appinfo.json" 2>/dev/null || true
+    umount "$VIDEO_APP_DIR" 2>/dev/null || true
+    umount "$APP_DIR" 2>/dev/null || true
+    echo "[+] Disabled. Reboot so SAM forgets the mounted manifest." >&2
+    exit 0
+fi
+
+# webOS 26 (11.x): only com.webos.app.videoads may play video as a screen saver. tvpowerd starts
+# it instead of com.webos.app.screensaver when isVideoScreenSaverEnabled is on, so use that slot
+# and let the hardware pipeline play the clips.
+if [ "$(sdk_major)" -ge 11 ] && [ -f "$VIDEO_MANIFEST" ] && [ -d "$VIDEO_APP_DIR" ]; then
+    LOCK=/tmp/aerial-videoads.lock
+    if ! mkdir "$LOCK" 2>/dev/null; then
+        echo "[-] Already applying, try again in a moment" >&2
+        exit 1
+    fi
+    trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+
+    if ! findmnt "$VIDEO_APP_DIR" >/dev/null; then
+        mount --bind "$ASSETS_DIR" "$VIDEO_APP_DIR"
+    fi
+    if ! findmnt "$VIDEO_APP_DIR/appinfo.json" >/dev/null; then
+        mount --bind "$VIDEO_MANIFEST" "$VIDEO_APP_DIR/appinfo.json"
+    fi
+
+    $TIMEOUT luna-send -n 1 "$SETTINGS_CALL" \
+        '{"category":"lgchannels","settings":{"isVideoScreenSaverEnabled":true}}' </dev/null >/dev/null 2>&1 || true
+
+    if systemctl is-active -q sam.service; then
+        i=0
+        while [ "$i" -lt 15 ]; do
+            i=$((i + 1))
+            # The stock videoads app is a web app too, so only "main" proves SAM read ours
+            info="$($TIMEOUT luna-send -n 1 -f luna://com.webos.applicationManager/getAppInfo \
+                "{\"id\":\"$VIDEO_APP_ID\"}" </dev/null 2>/dev/null || true)"
+            case "$info" in
+                *web-screensaver.html*) break ;;
+            esac
+            $TIMEOUT luna-send -n 1 luna://com.webos.applicationManager/blockSystemApp \
+                "{\"id\":\"$VIDEO_APP_ID\",\"forceBlockSystemApp\":false}" </dev/null >/dev/null 2>&1 || true
+            sleep 1
+            $TIMEOUT luna-send -n 1 luna://com.webos.applicationManager/releaseBlockSystemApp \
+                "{\"id\":\"$VIDEO_APP_ID\"}" </dev/null >/dev/null 2>&1 || true
+            sleep 2
+        done
+        case "$info" in
+            *web-screensaver.html*) ;;
+            *)
+                umount "$VIDEO_APP_DIR/appinfo.json" 2>/dev/null || true
+                umount "$VIDEO_APP_DIR" 2>/dev/null || true
+                $TIMEOUT luna-send -n 1 "$SETTINGS_CALL" \
+                    '{"category":"lgchannels","settings":{"isVideoScreenSaverEnabled":false}}' </dev/null >/dev/null 2>&1 || true
+                echo "[-] SAM did not read the video screen saver manifest; LG's own stays in place." >&2
+                exit 1
+                ;;
+        esac
+    fi
+    echo "[+] Enabled succesfully (video screen saver)" >&2
+    exit 0
+fi
 
 # webOS 25 (10.x) and 26 (11.x): the stock screensaver is a Flutter app and QML apps can't be
 # launched, so replace the whole app directory with assets/, which holds a web app (appinfo.json +

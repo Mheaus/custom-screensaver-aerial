@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - webOS 25 (10.x): if another app has a paused video, the web screensaver no longer takes its
   video decoder, and shows a moving clock instead of video.
 
+### Added
+- webOS 26 (11.x): `apply.sh` uses LG's video screen saver slot, `com.webos.app.videoads`, which
+  `tvpowerd` starts when `isVideoScreenSaverEnabled` is on. The clips then go through the hardware
+  pipeline (4K HEVC, no measurable CPU), because a video played by `com.webos.app.screensaver`
+  ends the screen saver after ~0.2 s. `apply.sh --off` puts the stock screen saver and the LG
+  setting back.
+
 ### Changed
 - webOS 25/26 (10.x/11.x): `apply.sh` makes SAM reread the screensaver's manifest with
   `blockSystemApp` + `releaseBlockSystemApp` (as Glasshouse and Luma do) instead of restarting
