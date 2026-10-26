@@ -230,6 +230,14 @@ loadJSONData(basePath + "settings.json")
     .then(function (s) { for (var key in s) settings[key] = s[key]; })
     .catch(function (e) { console.error(e.message); })
     .then(function () {
+        // webOS 26 ends the screen saver when a media pipeline starts, so video played by this
+        // page lasts about 0.2 s. VideoDecoder does not start one; use it when asked to.
+        if (settings.useWebCodecs === true && typeof VideoDecoder !== "undefined") {
+            location.replace(basePath + "web-screensaver-codec.html");
+            return new Promise(function () {});
+        }
+    })
+    .then(function () {
         return Promise.all([
             loadJSONData(basePath + "videos.json"),
             loadJSONData(basePath + "locales/" + settings.localeLang + ".json").catch(function () { return { strings: {} }; }),

@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- webOS 26 (11.x), opt-in: `settings.json` accepts `"useWebCodecs": true`, which hands the web
+  screen saver to `web-screensaver-codec.html`, a canvas player that decodes the clips with
+  `VideoDecoder` instead of `<video>`. No media pipeline starts, so `tvpowerd` keeps the screen
+  saver alive. It uses the 1080p H.264 variants: `VideoDecoder` here refuses this TV's HEVC.
 - webOS 25 (10.x) support: on TVs with the Flutter-based stock screensaver, `apply.sh` mounts a
   web version of the screensaver that uses the same settings, videos and locales.
 - webOS 25 (10.x): if another app has a paused video, the web screensaver no longer takes its
